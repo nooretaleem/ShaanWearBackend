@@ -28,7 +28,7 @@ const parseOrigins = () => {
       if (trimmed) allowed.push(trimmed);
     });
   }
-  return allowed.length > 0 ? allowed : ['http://localhost:4200', 'http://localhost:5500'];
+  return allowed.length > 0 ? allowed : ['http://localhost:4200', 'http://localhost:5500', 'https://shaanwear.vercel.app'];
 };
 
 module.exports = {
