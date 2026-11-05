@@ -15,20 +15,30 @@ for (const envVar of requiredEnvVars) {
 
 // Parse allowed CORS origins
 const parseOrigins = () => {
-  const allowed = [];
+  const defaults = [
+    'http://127.0.0.1:5500',
+    'http://localhost:4200',
+    'http://localhost:5500',
+    'https://shaanwear.vercel.app',
+    'https://shaanwearwebsite.vercel.app',
+    'https://shaanwearadmin.vercel.app',
+    'https://shaan-wear-admin.vercel.app',
+    'https://shalimaradmin.vercel.app'
+  ];
+  const allowed = new Set(defaults);
   if (process.env.FRONTEND_URL) {
     process.env.FRONTEND_URL.split(',').forEach(origin => {
-      const trimmed = origin.trim();
-      if (trimmed) allowed.push(trimmed);
+      const trimmed = origin.trim().replace(/\/+$/, '');
+      if (trimmed) allowed.add(trimmed);
     });
   }
   if (process.env.ADMIN_URL) {
     process.env.ADMIN_URL.split(',').forEach(origin => {
-      const trimmed = origin.trim();
-      if (trimmed) allowed.push(trimmed);
+      const trimmed = origin.trim().replace(/\/+$/, '');
+      if (trimmed) allowed.add(trimmed);
     });
   }
-  return allowed.length > 0 ? allowed : ['http://127.0.0.1:5500', 'http://localhost:4200', 'http://localhost:5500', 'https://shaanwear.vercel.app', 'https://shaanwearwebsite.vercel.app'];
+  return Array.from(allowed);
 };
 
 module.exports = {

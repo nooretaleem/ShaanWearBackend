@@ -24,7 +24,9 @@ const corsOptions = {
     // Allow non-browser requests (e.g., Postman, curl, server-to-server) with no origin
     if (!origin) return callback(null, true);
     
-    if (config.allowedOrigins.indexOf(origin) !== -1) {
+    const cleanOrigin = origin.replace(/\/+$/, '');
+    const isVercelProjectOrigin = /^https:\/\/[a-z0-9-]*(shaan|shalimar)[a-z0-9-]*\.vercel\.app$/i.test(cleanOrigin);
+    if (config.allowedOrigins.indexOf(cleanOrigin) !== -1 || isVercelProjectOrigin) {
       callback(null, true);
     } else {
       const corsErr = new Error(`CORS Error: Origin '${origin}' is not permitted.`);
