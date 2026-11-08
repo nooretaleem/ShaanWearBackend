@@ -1,5 +1,9 @@
 const prisma = require('../config/database');
 const { slugify } = require('../utils/slugify');
+const {
+  notifyWishlistUsersForBackInStock,
+  notifyWishlistUsersForPriceDrop
+} = require('../services/emailService');
 
 const VALID_STATUSES = ['DRAFT', 'PUBLISHED', 'ARCHIVED'];
 
@@ -487,6 +491,23 @@ const updateProduct = async (req, res, next) => {
       });
     }
 
+    // Snapshot previous pricing and stock levels for automated Wishlist triggers
+    const oldBasePrice = existingProduct.basePrice !== null && existingProduct.basePrice !== undefined
+      ? parseFloat(existingProduct.basePrice)
+      : null;
+
+    const oldVariantStockMap = new Map();
+    const oldVariantPriceMap = new Map();
+    (existingProduct.variants || []).forEach(v => {
+      oldVariantStockMap.set(v.sku, v.stock);
+      oldVariantStockMap.set(v.id, v.stock);
+      if (v.price !== null && v.price !== undefined) {
+        oldVariantPriceMap.set(v.sku, parseFloat(v.price));
+        oldVariantPriceMap.set(v.id, parseFloat(v.price));
+      }
+    });
+    const oldTotalStock = (existingProduct.variants || []).reduce((sum, v) => sum + (v.stock || 0), 0);
+
     const updateFields = {};
 
     // Validate and update name
@@ -688,6 +709,66 @@ const updateProduct = async (req, res, next) => {
       }
     });
 
+    // -----------------------------------------------------------------
+    // AUTOMATION: Wishlist Triggers (Asynchronous & Non-blocking)
+    // -----------------------------------------------------------------
+
+    // 1. Price Drop Alert Trigger (Base Price reduction)
+    const newBasePrice = updated.basePrice !== null && updated.basePrice !== undefined
+      ? parseFloat(updated.basePrice)
+      : null;
+
+    if (oldBasePrice !== null && newBasePrice !== null && newBasePrice < oldBasePrice) {
+      notifyWishlistUsersForPriceDrop(id, oldBasePrice, newBasePrice).catch(err => {
+        console.error('[Wishlist Alert - Price Drop Error]:', err.message || err);
+      });
+    } else {
+      // Check if any variant price dropped
+      for (const v of updated.variants) {
+        const oldVPrice = oldVariantPriceMap.get(v.sku) ?? oldVariantPriceMap.get(v.id);
+        const newVPrice = v.price !== null && v.price !== undefined ? parseFloat(v.price) : null;
+        if (oldVPrice !== undefined && newVPrice !== null && newVPrice < oldVPrice) {
+          notifyWishlistUsersForPriceDrop(id, oldVPrice, newVPrice).catch(err => {
+            console.error('[Wishlist Alert - Variant Price Drop Error]:', err.message || err);
+          });
+          break; // Avoid sending duplicate emails if multiple variants dropped
+        }
+      }
+    }
+
+    // 2. Back-in-Stock Alert Trigger (Stock changed from 0 to > 0)
+    let restockedVariant = null;
+    for (const v of updated.variants) {
+      const prevStock = oldVariantStockMap.has(v.sku)
+        ? oldVariantStockMap.get(v.sku)
+        : (oldVariantStockMap.get(v.id) ?? 0);
+
+      if (prevStock === 0 && v.stock > 0) {
+        restockedVariant = v;
+        break;
+      }
+    }
+
+    // Also check if whole product was out of stock and now has stock
+    if (!restockedVariant && oldTotalStock === 0) {
+      const positiveVariant = updated.variants.find(v => v.stock > 0);
+      if (positiveVariant) {
+        restockedVariant = positiveVariant;
+      }
+    }
+
+    if (restockedVariant) {
+      notifyWishlistUsersForBackInStock(id, {
+        id: restockedVariant.id,
+        sku: restockedVariant.sku,
+        size: restockedVariant.size,
+        color: restockedVariant.color,
+        stock: restockedVariant.stock
+      }).catch(err => {
+        console.error('[Wishlist Alert - Back in Stock Error]:', err.message || err);
+      });
+    }
+
     return res.status(200).json({
       success: true,
       message: 'Product updated successfully.',
@@ -783,10 +864,180 @@ const deleteProduct = async (req, res, next) => {
   }
 };
 
+/**
+ * PATCH /api/products/:id/inventory
+ * Dedicated inventory update controller.
+ * Supports direct stock setting or delta adjustments with audit logging.
+ * Triggers automated Back-in-Stock email to Wishlist users if stock moves from 0 to > 0.
+ */
+const updateInventory = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { variantId, sku, stock, quantityChange, movementType, reason } = req.body;
+
+    if (stock === undefined && quantityChange === undefined) {
+      return res.status(400).json({
+        success: false,
+        error: { message: 'Either stock or quantityChange must be provided.', statusCode: 400 }
+      });
+    }
+
+    // 1. Locate product and target variant
+    let variant = await prisma.productVariant.findUnique({
+      where: { id },
+      include: { product: true }
+    });
+
+    let product = null;
+
+    if (variant) {
+      product = variant.product;
+    } else {
+      product = await prisma.product.findUnique({
+        where: { id },
+        include: { variants: true }
+      });
+
+      if (!product) {
+        return res.status(404).json({
+          success: false,
+          error: { message: `Product or Variant with ID '${id}' was not found.`, statusCode: 404 }
+        });
+      }
+
+      if (variantId) {
+        variant = product.variants.find(v => v.id === variantId);
+        if (!variant) {
+          return res.status(404).json({
+            success: false,
+            error: { message: `Variant with ID '${variantId}' not found on product '${id}'.`, statusCode: 404 }
+          });
+        }
+      } else if (sku) {
+        const targetSku = String(sku).trim().toUpperCase();
+        variant = product.variants.find(v => v.sku.toUpperCase() === targetSku);
+        if (!variant) {
+          return res.status(404).json({
+            success: false,
+            error: { message: `Variant with SKU '${sku}' not found on product '${id}'.`, statusCode: 404 }
+          });
+        }
+      } else if (product.variants.length === 1) {
+        variant = product.variants[0];
+      } else if (product.variants.length === 0) {
+        return res.status(400).json({
+          success: false,
+          error: { message: 'Product has no variants. Please create a variant first.', statusCode: 400 }
+        });
+      } else {
+        return res.status(400).json({
+          success: false,
+          error: {
+            message: 'Product has multiple variants. Please specify variantId or sku in request body.',
+            statusCode: 400,
+            availableVariants: product.variants.map(v => ({ id: v.id, sku: v.sku, size: v.size, color: v.color, stock: v.stock }))
+          }
+        });
+      }
+    }
+
+    const oldStock = variant.stock;
+    let newStock = oldStock;
+
+    if (stock !== undefined) {
+      const parsedStock = parseInt(stock, 10);
+      if (isNaN(parsedStock) || parsedStock < 0) {
+        return res.status(400).json({
+          success: false,
+          error: { message: 'stock must be a non-negative integer.', statusCode: 400 }
+        });
+      }
+      newStock = parsedStock;
+    } else if (quantityChange !== undefined) {
+      const parsedChange = parseInt(quantityChange, 10);
+      if (isNaN(parsedChange)) {
+        return res.status(400).json({
+          success: false,
+          error: { message: 'quantityChange must be a valid integer.', statusCode: 400 }
+        });
+      }
+      newStock = Math.max(0, oldStock + parsedChange);
+    }
+
+    const actualChange = newStock - oldStock;
+    const resolvedMovementType = movementType || (actualChange >= 0 ? 'RESTOCK' : 'ADJUSTMENT');
+
+    // 2. Perform atomic stock update and log inventory movement
+    const updatedVariant = await prisma.$transaction(async (tx) => {
+      const updated = await tx.productVariant.update({
+        where: { id: variant.id },
+        data: { stock: newStock }
+      });
+
+      try {
+        await tx.inventoryMovement.create({
+          data: {
+            productVariantId: variant.id,
+            userId: req.user?.id || null,
+            movementType: resolvedMovementType,
+            quantityChange: actualChange,
+            balanceAfter: newStock,
+            reason: reason ? String(reason).trim() : (actualChange >= 0 ? 'Inventory Restock' : 'Stock Adjustment')
+          }
+        });
+      } catch (movementErr) {
+        console.warn('[InventoryMovement Warning]: Could not record inventory movement log:', movementErr.message);
+      }
+
+      return updated;
+    });
+
+    // 3. Automation Trigger: Stock changed from 0 to > 0
+    let alertTriggered = false;
+    if (oldStock === 0 && newStock > 0) {
+      alertTriggered = true;
+      notifyWishlistUsersForBackInStock(product.id, {
+        id: updatedVariant.id,
+        sku: updatedVariant.sku,
+        size: updatedVariant.size,
+        color: updatedVariant.color,
+        stock: newStock
+      }).catch(err => {
+        console.error('[Wishlist Alert - Inventory Back in Stock Error]:', err.message || err);
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: alertTriggered
+        ? 'Inventory updated. Back-in-stock alerts dispatched to Wishlist customers.'
+        : 'Inventory updated successfully.',
+      data: {
+        productId: product.id,
+        productName: product.name,
+        variant: {
+          id: updatedVariant.id,
+          sku: updatedVariant.sku,
+          size: updatedVariant.size,
+          color: updatedVariant.color,
+          previousStock: oldStock,
+          currentStock: newStock,
+          change: actualChange
+        },
+        backInStockAlertTriggered: alertTriggered
+      }
+    });
+  } catch (error) {
+    console.error('[Product Controller - Update Inventory Error]:', error.message || error);
+    next(error);
+  }
+};
+
 module.exports = {
   getProducts,
   getProductById,
   createProduct,
   updateProduct,
+  updateInventory,
   deleteProduct
 };

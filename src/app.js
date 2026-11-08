@@ -10,6 +10,7 @@ const productRoutes = require('./routes/productRoutes');
 const catalogRoutes = require('./routes/catalogRoutes');
 const orderRoutes = require('./routes/orderRoutes');
 const customerRoutes = require('./routes/customerRoutes');
+const customerDashboardRoutes = require('./routes/customerDashboardRoutes');
 const discountRoutes = require('./routes/discountRoutes');
 const { notFoundHandler, errorHandler } = require('./middleware/errorMiddleware');
 
@@ -26,7 +27,8 @@ const corsOptions = {
     
     const cleanOrigin = origin.replace(/\/+$/, '');
     const isVercelProjectOrigin = /^https:\/\/[a-z0-9-]*(shaan|shalimar)[a-z0-9-]*\.vercel\.app$/i.test(cleanOrigin);
-    if (config.allowedOrigins.indexOf(cleanOrigin) !== -1 || isVercelProjectOrigin) {
+    const isLocalDevOrigin = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(cleanOrigin);
+    if (config.allowedOrigins.indexOf(cleanOrigin) !== -1 || isVercelProjectOrigin || isLocalDevOrigin) {
       callback(null, true);
     } else {
       const corsErr = new Error(`CORS Error: Origin '${origin}' is not permitted.`);
@@ -55,6 +57,7 @@ app.use('/api/catalog', catalogRoutes);
 app.use('/api/public', catalogRoutes);
 app.use('/api/orders', orderRoutes);
 app.use('/api/customers', customerRoutes);
+app.use('/api/customer', customerDashboardRoutes);
 app.use('/api/discounts', discountRoutes);
 app.use('/api/coupons', discountRoutes);
 

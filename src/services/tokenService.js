@@ -2,13 +2,29 @@ const jwt = require('jsonwebtoken');
 const config = require('../config/env');
 
 /**
- * Generate a signed JWT for an authenticated admin user.
+ * Generate a signed short-lived access JWT for an authenticated user.
  * Payload includes the user ID, email, and role names.
  */
-const generateToken = (payload) => {
+const generateAccessToken = (payload) => {
   return jwt.sign(payload, config.jwtSecret, {
-    expiresIn: config.jwtExpiresIn
+    expiresIn: config.jwtExpiresIn || '24h'
   });
+};
+
+/**
+ * Generate a signed refresh JWT with longer validity (7 days).
+ */
+const generateRefreshToken = (payload) => {
+  return jwt.sign(payload, config.jwtSecret, {
+    expiresIn: '7d'
+  });
+};
+
+/**
+ * Alias for generateAccessToken to ensure backwards compatibility.
+ */
+const generateToken = (payload) => {
+  return generateAccessToken(payload);
 };
 
 /**
@@ -18,7 +34,17 @@ const verifyToken = (token) => {
   return jwt.verify(token, config.jwtSecret);
 };
 
+/**
+ * Verify a refresh token.
+ */
+const verifyRefreshToken = (token) => {
+  return jwt.verify(token, config.jwtSecret);
+};
+
 module.exports = {
   generateToken,
-  verifyToken
+  generateAccessToken,
+  generateRefreshToken,
+  verifyToken,
+  verifyRefreshToken
 };

@@ -330,6 +330,7 @@ const createStorefrontOrder = async (req, res, next) => {
       shippingPostalCode = '',
       customerEmail,
       customerName,
+      email,
       items,
       couponCode
     } = req.body;
@@ -376,12 +377,33 @@ const createStorefrontOrder = async (req, res, next) => {
 
     for (const item of items) {
       const quantity = Math.max(1, parseInt(item.quantity || item.qty, 10) || 1);
-      const unitPrice = parseFloat(item.unitPrice !== undefined ? item.unitPrice : item.price);
+      let unitPrice = parseFloat(item.unitPrice !== undefined ? item.unitPrice : item.price);
+      let productName = (item.productName || item.name || '').trim();
+      let sku = (item.sku || '').trim();
+
+      // If price or name missing, fallback to product record in database
+      if ((isNaN(unitPrice) || !productName) && item.productId) {
+        const prod = await prisma.product.findUnique({
+          where: { id: item.productId },
+          include: { variants: true }
+        });
+        if (prod) {
+          if (isNaN(unitPrice)) {
+            unitPrice = parseFloat(prod.basePrice || 0);
+          }
+          if (!productName) {
+            productName = prod.name;
+          }
+          if (!sku) {
+            sku = prod.variants?.[0]?.sku || `SW-${prod.slug.toUpperCase()}`;
+          }
+        }
+      }
 
       if (isNaN(unitPrice) || unitPrice < 0) {
         return res.status(400).json({
           success: false,
-          error: { message: `Invalid price for item '${item.productName || item.name || 'Unknown'}'.`, statusCode: 400 }
+          error: { message: `Invalid price for item '${productName || 'Unknown'}'.`, statusCode: 400 }
         });
       }
 
@@ -391,8 +413,8 @@ const createStorefrontOrder = async (req, res, next) => {
       processedItems.push({
         productId: item.productId || null,
         productVariantId: item.productVariantId || null,
-        productName: (item.productName || item.name || 'SHAANWEAR Item').trim(),
-        sku: (item.sku || `SW-ITEM-${Math.floor(1000 + Math.random() * 9000)}`).trim(),
+        productName: (productName || 'SHAANWEAR Item').trim(),
+        sku: (sku || `SW-ITEM-${Math.floor(1000 + Math.random() * 9000)}`).trim(),
         unitPrice,
         quantity,
         lineTotal
@@ -477,11 +499,13 @@ const createStorefrontOrder = async (req, res, next) => {
 
     // Customer upsert or lookup
     let customerId = null;
-    const emailToUse = (customerEmail && typeof customerEmail === 'string' && customerEmail.trim())
-      ? customerEmail.trim().toLowerCase()
+    const rawEmail = customerEmail || email || req.body.customer?.email;
+    const emailToUse = (rawEmail && typeof rawEmail === 'string' && rawEmail.trim())
+      ? rawEmail.trim().toLowerCase()
       : null;
-    const nameToUse = (customerName && typeof customerName === 'string' && customerName.trim())
-      ? customerName.trim()
+    const rawName = customerName || req.body.name || req.body.customer?.name;
+    const nameToUse = (rawName && typeof rawName === 'string' && rawName.trim())
+      ? rawName.trim()
       : shippingName.trim();
     const phoneToUse = shippingPhone.trim();
 
@@ -512,6 +536,20 @@ const createStorefrontOrder = async (req, res, next) => {
       customerId = newCustomer.id;
     }
 
+    // Detect authenticated customer or link to registered user by email
+    let orderUserId = req.user?.id || null;
+    if (!orderUserId && req.headers.authorization && req.headers.authorization.startsWith('Bearer ')) {
+      try {
+        const { verifyToken } = require('../services/tokenService');
+        const decoded = verifyToken(req.headers.authorization.split(' ')[1]);
+        if (decoded?.userId) orderUserId = decoded.userId;
+      } catch (_) {}
+    }
+    if (!orderUserId && emailToUse) {
+      const matchedUser = await prisma.user.findUnique({ where: { email: emailToUse } });
+      if (matchedUser) orderUserId = matchedUser.id;
+    }
+
     // Generate unique order number: SW-XXXXXX
     let orderNumber = `SW-${Math.floor(100000 + Math.random() * 900000)}`;
     let isUnique = false;
@@ -533,6 +571,7 @@ const createStorefrontOrder = async (req, res, next) => {
         data: {
           orderNumber,
           customerId,
+          userId: orderUserId,
           discountId: appliedDiscount ? appliedDiscount.id : null,
           subtotal,
           discountAmount,
@@ -569,10 +608,24 @@ const createStorefrontOrder = async (req, res, next) => {
       return order;
     });
 
+    const totalNum = parseFloat(newOrder.total);
+    const subtotalNum = parseFloat(newOrder.subtotal);
+    const shippingNum = parseFloat(newOrder.shippingAmount);
+    const discountNum = parseFloat(newOrder.discountAmount);
+
+    const formattedOrder = {
+      ...newOrder,
+      total: totalNum,
+      totalAmount: totalNum,
+      subtotal: subtotalNum,
+      shippingAmount: shippingNum,
+      discountAmount: discountNum
+    };
+
     return res.status(201).json({
       success: true,
       message: `Order ${newOrder.orderNumber} placed successfully.`,
-      data: { order: newOrder }
+      data: { order: formattedOrder }
     });
   } catch (error) {
     console.error('[Order Controller - Create Storefront Order Error]:', error.message || error);

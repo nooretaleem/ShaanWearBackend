@@ -23,6 +23,10 @@ model User {
   // Relations
   userRoles          UserRole[]
   inventoryMovements InventoryMovement[]
+  addresses          Address[]
+  cart               Cart?
+  wishlist           Wishlist?
+  orders             Order[]
 
   @@map("users")
 }
@@ -124,10 +128,12 @@ model Product {
   updatedAt   DateTime      @updatedAt @map("updated_at")
 
   // Relations
-  category    Category      @relation(fields: [categoryId], references: [id], onDelete: Restrict)
-  variants    ProductVariant[]
-  images      ProductImage[]
-  orderItems  OrderItem[]
+  category      Category        @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  variants      ProductVariant[]
+  images        ProductImage[]
+  orderItems    OrderItem[]
+  cartItems     CartItem[]
+  wishlistItems WishlistItem[]
 
   @@index([categoryId])
   @@index([status])
@@ -152,6 +158,7 @@ model ProductVariant {
   images             ProductImage[]
   inventoryMovements InventoryMovement[]
   orderItems         OrderItem[]
+  cartItems          CartItem[]
 
   @@index([productId])
   @@index([sku])
@@ -253,6 +260,7 @@ model Order {
   id                String            @id @default(uuid())
   orderNumber       String            @unique @map("order_number") @db.VarChar(64) // e.g. "SW-94812"
   customerId        String?           @map("customer_id")
+  userId            String?           @map("user_id")
   discountId        String?           @map("discount_id")
 
   // Financial Snapshots
@@ -279,11 +287,13 @@ model Order {
 
   // Relations (Historical integrity: never cascade delete orders)
   customer          Customer?         @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  user              User?             @relation(fields: [userId], references: [id], onDelete: SetNull)
   discount          Discount?         @relation(fields: [discountId], references: [id], onDelete: SetNull)
   items             OrderItem[]
 
   @@index([orderNumber])
   @@index([customerId])
+  @@index([userId])
   @@index([paymentStatus])
   @@index([fulfillmentStatus])
   @@index([createdAt])
@@ -344,4 +354,93 @@ model Discount {
   @@index([isActive])
   @@index([startDate, expiryDate])
   @@map("discounts")
+}
+
+// ==============================================================================
+// 6. CUSTOMER DASHBOARD (ADDRESSES, PERSISTENT CART, PERSISTENT WISHLIST)
+// ==============================================================================
+
+model Address {
+  id         String   @id @default(uuid())
+  userId     String   @map("user_id")
+  name       String   @db.VarChar(191)       // Recipient full name
+  phone      String   @db.VarChar(32)        // Contact phone number
+  address    String   @db.VarChar(255)       // Street / house / flat address
+  city       String   @db.VarChar(100)       // City (e.g. Lahore, Karachi, Islamabad)
+  province   String?  @default("Punjab") @db.VarChar(100)
+  postalCode String?  @map("postal_code") @db.VarChar(20)
+  isDefault  Boolean  @default(false) @map("is_default")
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([userId, isDefault])
+  @@map("addresses")
+}
+
+model Cart {
+  id        String     @id @default(uuid())
+  userId    String     @unique @map("user_id")
+  createdAt DateTime   @default(now()) @map("created_at")
+  updatedAt DateTime   @updatedAt @map("updated_at")
+
+  // Relations
+  user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  items     CartItem[]
+
+  @@map("carts")
+}
+
+model CartItem {
+  id               String          @id @default(uuid())
+  cartId           String          @map("cart_id")
+  productId        String          @map("product_id")
+  productVariantId String?         @map("product_variant_id")
+  size             String?         @db.VarChar(32)
+  color            String?         @db.VarChar(64)
+  quantity         Int             @default(1)
+  createdAt        DateTime        @default(now()) @map("created_at")
+  updatedAt        DateTime        @updatedAt @map("updated_at")
+
+  // Relations
+  cart             Cart            @relation(fields: [cartId], references: [id], onDelete: Cascade)
+  product          Product         @relation(fields: [productId], references: [id], onDelete: Cascade)
+  variant          ProductVariant? @relation(fields: [productVariantId], references: [id], onDelete: SetNull)
+
+  @@index([cartId])
+  @@index([productId])
+  @@index([productVariantId])
+  @@map("cart_items")
+}
+
+model Wishlist {
+  id        String         @id @default(uuid())
+  userId    String         @unique @map("user_id")
+  createdAt DateTime       @default(now()) @map("created_at")
+  updatedAt DateTime       @updatedAt @map("updated_at")
+
+  // Relations
+  user      User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  items     WishlistItem[]
+
+  @@map("wishlists")
+}
+
+model WishlistItem {
+  id         String   @id @default(uuid())
+  wishlistId String   @map("wishlist_id")
+  productId  String   @map("product_id")
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  // Relations
+  wishlist   Wishlist @relation(fields: [wishlistId], references: [id], onDelete: Cascade)
+  product    Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@unique([wishlistId, productId])
+  @@index([wishlistId])
+  @@index([productId])
+  @@map("wishlist_items")
 }

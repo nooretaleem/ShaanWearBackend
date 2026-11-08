@@ -5,6 +5,7 @@ const {
   getProductById,
   createProduct,
   updateProduct,
+  updateInventory,
   deleteProduct
 } = require('../controllers/productController');
 
@@ -19,6 +20,7 @@ router.get('/:id', requirePermissions('products:read'), getProductById);
 
 // Mutation endpoints require 'products:write'
 router.post('/', requirePermissions('products:write'), createProduct);
+router.patch('/:id/inventory', requirePermissions('products:write'), updateInventory);
 router.patch('/:id', requirePermissions('products:write'), updateProduct);
 router.delete('/:id', requirePermissions('products:write'), deleteProduct);
 

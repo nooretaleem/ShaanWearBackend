@@ -98,6 +98,7 @@ const authenticate = async (req, res, next) => {
       id: user.id,
       email: user.email,
       name: user.name,
+      createdAt: user.createdAt,
       isActive: user.isActive,
       roles: roles,
       permissions: Array.from(permissions)
