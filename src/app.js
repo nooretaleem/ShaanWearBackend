@@ -39,7 +39,7 @@ const corsOptions = {
   origin: (origin, callback) => {
     // Allow non-browser requests (e.g., Postman, curl, server-to-server) with no origin
     if (!origin) return callback(null, true);
-    
+
     const cleanOrigin = origin.replace(/\/+$/, '');
     const isExplicit = explicitAllowedOrigins.indexOf(cleanOrigin) !== -1;
     const isVercelProjectOrigin = /^https:\/\/[a-z0-9-]*(shaan|shalimar)[a-z0-9-]*\.vercel\.app$/i.test(cleanOrigin);
@@ -69,7 +69,7 @@ app.options('*', cors(corsOptions));
 // Request body parsers
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
-
+app.set('trust proxy', 1);
 // API Routes
 app.use('/api', healthRoutes);
 app.use('/api/auth', authRoutes);
