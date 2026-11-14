@@ -28,14 +28,13 @@ const explicitAllowedOrigins = [
   'https://shaanwearadmin.vercel.app',
   'https://shaan-wear-admin.vercel.app',
   'https://shalimaradmin.vercel.app',
+  'https://shaanwear.com',
+  'https://www.shaanwear.com',
   'http://localhost:5500',
   'http://127.0.0.1:5500',
   'http://localhost:4200',
-  'http://shaanwear.com',
-  'https://www.shaanwear.com',
   ...(config.allowedOrigins || [])
 ];
-
 // Configurable CORS allowlist
 const corsOptions = {
   origin: (origin, callback) => {
